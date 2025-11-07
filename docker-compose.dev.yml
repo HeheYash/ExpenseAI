@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # Development database with persistent data
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./backend/scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+
+  # Redis with persistence
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+    volumes:
+      - redis_dev_data:/data
+
+  # MinIO with persistent storage
+  minio:
+    extends:
+      file: docker-compose.yml
+      service: minio
+    volumes:
+      - minio_dev_data:/data
+
+  # Backend with development configuration
+  backend:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=debug
+      - RELOAD=true
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+
+  # Worker with development configuration
+  worker:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=debug
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    command: celery -A app.workers.celery_app worker --loglevel=debug
+
+  # Celery Beat for scheduled tasks
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/expense_manager
+      REDIS_URL: redis://redis:6379/0
+      DEBUG=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  # Flower for Celery monitoring
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+    command: celery -A app.workers.celery_app flower --port=5555
+
+  # Frontend with development configuration
+  frontend:
+    extends:
+      file: docker-compose.yml
+      service: frontend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+      - VITE_DEBUG=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  postgres_dev_data:
+  redis_dev_data:
+  minio_dev_data:
